@@ -1,19 +1,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include "Fila.h"
 #include "Tupla.h"
 
 #define TAM_JANELA 8
 #define TAM_BUFFER 4
 
-void salvar_arq(FILE *arq, int *bin);
+void salvarArq(FILE *arq, int *bin);
 void encontrar(Fila jan, Fila buff, int *pos, int *tam, int *car);
 void comprimir(FILE *tmp, FILE *comp);
 
-int criar_arq_tmp(FILE *original);
-int *clear_buffer(int *buff);
-int *converte_binario(int num, int *buff);
+int criarArqTmp(FILE *original);
+int *limparBuffer(int *buff);
+int *converteBinario(int num, int *buff);
+
+char *rstrstr(char *procurarei, char *procurando);
 
 int main()
 {
@@ -27,13 +30,27 @@ int main()
     scanf("%s", saida);
 
     // Arquivo temporario para armazenar string de "zeros e uns"
-    arq = fopen(entrada, "rb");
-    criar_arq_tmp(arq);
+    if (!(arq = fopen(entrada, "rb")))
+    {
+        fprintf(stderr, "Nao foi possivel abrir o arquivo %s", entrada);
+        return EXIT_FAILURE;
+    }
+    criarArqTmp(arq);
     fclose(arq);
 
-    // Comprimir
-    tmp = fopen(".lz77.tmp", "r");
-    comp = fopen(saida, "w");
+    if (!(tmp = fopen(".lz77.tmp", "r")))
+    {
+        fprintf(stderr, "Nao foi possivel abrir o arquivo temporario");
+        return EXIT_FAILURE;
+    }
+
+    if (!(comp = fopen(saida, "w")))
+    {
+        fprintf(stderr, "Nao foi possivel comprimir o arquivo");
+        fclose(tmp);
+        return EXIT_FAILURE;
+    }
+
     comprimir(tmp, comp);
     fclose(tmp);
     fclose(comp);
@@ -41,6 +58,14 @@ int main()
     return EXIT_SUCCESS;
 }
 
+/**
+ * Funcao responsavel por percorrer o arquivo
+ * temporario, deslizar a janela/buffer e
+ * salvar as tuplas no arquivo de saida/comprimido
+ *
+ * @param tmp  Arquivo temporario
+ * @param comp Arquivo de saida
+ */
 void comprimir(FILE *tmp, FILE *comp)
 {
     Fila buffer = iniFila();
@@ -86,41 +111,68 @@ void comprimir(FILE *tmp, FILE *comp)
 
         // Salvar tupla no arquivo comprimido
         saveTupla(comp, tupla);
+
+        printf("POS: %d\n", pos);
+        printf("TAM: %d\n", tam);
+        printf("CAR: %c\n\n", car);
     }
 
     // Quando sair do while, ainda faltara uma execucao para concluir
     encontrar(janela, buffer, &pos, &tam, &car);
-    setTupla(tupla, pos, TAM_BUFFER, '\0');
+    setTupla(tupla, pos, tam, car);
     saveTupla(comp, tupla);
 
     // Liberar a memoria
     freeTupla(tupla);
     freeFila(buffer);
     freeFila(janela);
+
+    printf("POS: %d\n", pos);
+    printf("TAM: %d\n", tam);
+    printf("CAR: %c\n\n", car);
 }
 
+/**
+ * Funcao responsavel por determinar qual
+ * eh a tupla para cada deslizamento da janela/buffer
+ *
+ * @param jan
+ * @param buff
+ * @param pos
+ * @param tam
+ * @param car
+ */
 void encontrar(Fila jan, Fila buff, int *pos, int *tam, int *car)
 {
+    // Copia do buffer em vetor de string
     char *buffer = getVetFila(buff);
+
+    // Outra copia do buffer em vetor de string (gambiarra)
     char *cp_buf = getVetFila(buff);
+
+    // Copia da janela em vetor de string
     char *janela = getVetFila(jan);
-    char *tmp, *tmp2;
+
+    // Variavel auxiliar temporaria
+    char *tmp;
 
     for (int i = TAM_BUFFER - 1; i >= 0; i--)
     {
+        // Remove o ultimo elemento do buffer para nova comparacao
         buffer[i+1] = '\0';
-        tmp = strstr(janela, buffer);
-        if (tmp != NULL)
+
+        // Verifica se ha alguma ocorrencia do buffer na janela
+        // Retorna a ultima ocorrencia, caso exista, senao retorna NULL
+        if ((tmp = rstrstr(janela, buffer)) != NULL)
         {
+            // Atualiza o tamanho da string
             *tam = (int) strlen(buffer);
 
-            tmp2 = strstr(tmp + *tam, buffer);
+            // Posicao da janela onde foi encontrado a
+            // ocorrencia do buffer (da direita para a esquerda)
+            *pos = (int) strlen(tmp);
 
-            if (tmp2 != NULL)
-                *pos = (int) strlen(tmp2);
-            else
-                *pos = (int) strlen(tmp);
-
+            // Atualiza o caracter de quebra
             *car = cp_buf[*tam];
             break;
         }
@@ -132,27 +184,53 @@ void encontrar(Fila jan, Fila buff, int *pos, int *tam, int *car)
     free(janela);
 }
 
-int *converte_binario(int num, int *buff)
+/**
+ * Converte um inteiro para binario com 8 bits
+ *
+ * @param num
+ * @param buff
+ * @return
+ */
+int *converteBinario(int num, int *buff)
 {
     for (int i = 7; num != 0; num /= 2, i--)
         buff[i] = num % 2;
     return buff;
 }
 
-int *clear_buffer(int *buff)
+/**
+ * Preenche todas as posicoes do buffer com 0
+ *
+ * @param buff
+ * @return
+ */
+int *limparBuffer(int *buff)
 {
     for (int i = 0; i < 8; i++)
         buff[i] = 0;
     return buff;
 }
 
-void salvar_arq(FILE *arq, int *bin)
+/**
+ * Salva o conteudo do buffer no arquivo
+ *
+ * @param arq
+ * @param bin
+ */
+void salvarArq(FILE *arq, int *bin)
 {
     for (int i = 0; i < 8; i++)
         fprintf(arq, "%d", bin[i]);
 }
 
-int criar_arq_tmp(FILE *original)
+/**
+ * Le os dados do arquivo original, converte para
+ * binario e salva o binario em um arquivo temporario
+ *
+ * @param original
+ * @return
+ */
+int criarArqTmp(FILE *original)
 {
     FILE *tmp;
     int buff[8];
@@ -163,8 +241,31 @@ int criar_arq_tmp(FILE *original)
 
     while(!feof(original))
         if (fread(&info, 1, 1, original))
-            salvar_arq(tmp, converte_binario(info, clear_buffer(buff)));
+            salvarArq(tmp, converteBinario(info, limparBuffer(buff)));
 
     fclose(tmp);
     return 1;
+}
+
+/**
+ * Retorna um ponteiro para a ultima
+ * ocorrencia de procurando em procurarei.
+ *
+ * Caso nenhuma ocorrencia seja encontrada, retorna NULL
+ *
+ * @param procurarei
+ * @param procurando
+ * @return
+ */
+char *rstrstr(char *procurarei, char *procurando)
+{
+    char *tmp, *tmp2 = NULL;
+
+    while ((tmp = strstr(procurarei, procurando)) != NULL)
+    {
+        tmp2 = tmp;
+        procurarei = tmp2 + strlen(procurando);
+    }
+
+    return tmp2;
 }
