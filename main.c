@@ -1,271 +1,248 @@
+/**
+ * Programacao com Arquivos
+ *
+ * Compactador de Arquivos (Algoritimo LZ77)
+ *
+ * Alline Ribeiro
+ * Edson Onildo
+ * Isabela Carvalho
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "Fila.h"
-#include "Tupla.h"
-
-#define TAM_JANELA 8
-#define TAM_BUFFER 4
-
-void salvarArq(FILE *arq, int *bin);
-void encontrar(Fila jan, Fila buff, int *pos, int *tam, int *car);
-void comprimir(FILE *tmp, FILE *comp);
-
-int criarArqTmp(FILE *original);
-int *limparBuffer(int *buff);
-int *converteBinario(int num, int *buff);
-
-char *rstrstr(char *procurarei, char *procurando);
-
-int main()
-{
-    FILE *arq, *tmp, *comp;
-    char entrada[255], saida[255];
-
-    printf("INFORME O NOME DO ARQUIVO QUE DESEJA COMPRIMIR: ");
-    scanf("%s", entrada);
-
-    printf("INFORME O NOME DO ARQUIVO DE SAIDA: ");
-    scanf("%s", saida);
-
-    // Arquivo temporario para armazenar string de "zeros e uns"
-    if (!(arq = fopen(entrada, "rb")))
-    {
-        fprintf(stderr, "Nao foi possivel abrir o arquivo %s", entrada);
-        return EXIT_FAILURE;
-    }
-    criarArqTmp(arq);
-    fclose(arq);
-
-    if (!(tmp = fopen(".lz77.tmp", "r")))
-    {
-        fprintf(stderr, "Nao foi possivel abrir o arquivo temporario");
-        return EXIT_FAILURE;
-    }
-
-    if (!(comp = fopen(saida, "w")))
-    {
-        fprintf(stderr, "Nao foi possivel comprimir o arquivo");
-        fclose(tmp);
-        return EXIT_FAILURE;
-    }
-
-    comprimir(tmp, comp);
-    fclose(tmp);
-    fclose(comp);
-
-    return EXIT_SUCCESS;
-}
+#include "lz77.h"
+#define N 256
 
 /**
- * Funcao responsavel por percorrer o arquivo
- * temporario, deslizar a janela/buffer e
- * salvar as tuplas no arquivo de saida/comprimido
+ * Funcao responsavel por deslizar o buffer/janela,
+ * encontrar a tupla, e salva-la no arquivo comprimido
  *
- * @param tmp  Arquivo temporario
- * @param comp Arquivo de saida
+ * @param temp Fonte de dados
+ * @param comp Arquivo comprimido
  */
-void comprimir(FILE *tmp, FILE *comp)
+void comprimir(FILE *temp, char *nomeOriginal, char *nomeComprimido)
 {
-    Fila buffer = iniFila();
-    Fila janela = iniFila();
-    Tupla tupla = iniTupla();
+    // Cria arquivo comprimido (ainda vazio)
+    FILE *comp = abrir(nomeComprimido, "wb");
 
-    int pos = 0;
-    int tam = 0;
-    int car = '0';
+    // Salva no arquivo comprimido o nome do arquivo original
+    // que sera utilizado na hora de descomprimir
+    fwrite(nomeOriginal, 1, N, comp);
+
+    int cont = 1;
+
+    // Conta a quantidade de caracteres no arquivo temporario
+    while(fgetc(temp) != EOF)
+        cont++;
+
+    // Salva no arquivo comprimido o tamanho do arquivo temporario
+    // que sera utilizado na hora de descomprimir
+    fwrite(&cont, 1, sizeof(int), comp);
+
+    // Rebobina o arquivo temporario
+    rewind(temp);
+
+    // Aloca um vetor para armazenar a string do arquivo temporario
+    char *str = (char*) malloc(cont * sizeof(char));
+
+    cont = 0;
+
+    // Preenche o vetor com as strings do arquivo temporario
+    while((str[cont] = (char) fgetc(temp)) != EOF)
+        cont++;
+
+    str[cont] = '\0';
+
+    char *buffer = (char *) malloc((TAM_BUF + 1) * sizeof(char));
+    char *janela = (char *) malloc((TAM_JAN + 1) * sizeof(char));
+
+    buffer[TAM_BUF] = '\0';
+    janela[0] = '\0';
+
+    Tupla tupla = (Tupla) malloc(sizeof(struct tupla));
 
     // Preenche o buffer com os primeiros simbolos
-    for(int i = 0; i < TAM_BUFFER; i++)
-        setFila(buffer, fgetc(tmp));
+    // (Para que tudo funcione bem, o buffer deve comecar preenchido)
+    strncpy(buffer, str, TAM_BUF);
+    str += TAM_BUF;
 
-    int c = fgetc(tmp);
-
-    while (c != EOF)
+    while(strlen(str) != 0)
     {
-        // Encontrar pos, tam e car
-        encontrar(janela, buffer, &pos, &tam, &car);
+        // Encontrar a tupla, salva no arquivo e desliza a janela
+        encontrar(janela, buffer, tupla);
+        salvarTupla(comp, tupla);
+        deslizar(&str, &janela, &buffer, tupla->tam+1);
 
-        // Deslocar tam + 1 simbolos
-        for (int i = 0; i < tam + 1; i++)
-        {
-            // Adiciona na janela o primeiro simbolo do buffer
-            // e descarta esse simbolo do buffer
-            setFila(janela, getFila(buffer));
-
-            // Descarta o primeiro simbolo da
-            // janela quando ela estiver cheia
-            if (lengthFila(janela) > TAM_JANELA)
-                getFila(janela);
-
-            // Adiciona no buffer o proximo simbolo da fonte de dados
-            setFila(buffer, c);
-
-            // Le o proximo simbolo da fonte de dados
-            c = fgetc(tmp);
-        }
-
-        // Armazena a tupla encontrada
-        setTupla(tupla, pos, tam, car);
-
-        // Salvar tupla no arquivo comprimido
-        saveTupla(comp, tupla);
-
-        printf("POS: %d\n", pos);
-        printf("TAM: %d\n", tam);
-        printf("CAR: %c\n\n", car);
+        // Debug
+        printf("(%d %d %c)\n", tupla->pos, tupla->tam, tupla->car);
     }
 
     // Quando sair do while, ainda faltara uma execucao para concluir
-    encontrar(janela, buffer, &pos, &tam, &car);
-    setTupla(tupla, pos, tam, car);
-    saveTupla(comp, tupla);
+    encontrar(janela, buffer, tupla);
+    salvarTupla(comp, tupla);
+    printf("(%d %d %c)\n", tupla->pos, tupla->tam, tupla->car);
 
-    // Liberar a memoria
-    freeTupla(tupla);
-    freeFila(buffer);
-    freeFila(janela);
-
-    printf("POS: %d\n", pos);
-    printf("TAM: %d\n", tam);
-    printf("CAR: %c\n\n", car);
-}
-
-/**
- * Funcao responsavel por determinar qual
- * eh a tupla para cada deslizamento da janela/buffer
- *
- * @param jan
- * @param buff
- * @param pos
- * @param tam
- * @param car
- */
-void encontrar(Fila jan, Fila buff, int *pos, int *tam, int *car)
-{
-    // Copia do buffer em vetor de string
-    char *buffer = getVetFila(buff);
-
-    // Outra copia do buffer em vetor de string (gambiarra)
-    char *cp_buf = getVetFila(buff);
-
-    // Copia da janela em vetor de string
-    char *janela = getVetFila(jan);
-
-    // Variavel auxiliar temporaria
-    char *tmp;
-
-    for (int i = TAM_BUFFER - 1; i >= 0; i--)
+    // Esvaziar o buffer
+    if (strlen(buffer) != TAM_BUF)
     {
-        // Remove o ultimo elemento do buffer para nova comparacao
-        buffer[i+1] = '\0';
-
-        // Verifica se ha alguma ocorrencia do buffer na janela
-        // Retorna a ultima ocorrencia, caso exista, senao retorna NULL
-        if ((tmp = rstrstr(janela, buffer)) != NULL)
-        {
-            // Atualiza o tamanho da string
-            *tam = (int) strlen(buffer);
-
-            // Posicao da janela onde foi encontrado a
-            // ocorrencia do buffer (da direita para a esquerda)
-            *pos = (int) strlen(tmp);
-
-            // Atualiza o caracter de quebra
-            *car = cp_buf[*tam];
-            break;
-        }
+        deslizar(&str, &janela, &buffer, tupla->tam+1);
+        encontrar(janela, buffer, tupla);
+        salvarTupla(comp, tupla);
     }
 
-    // Liberar a memoria
-    free(cp_buf);
     free(buffer);
     free(janela);
-}
 
-/**
- * Converte um inteiro para binario com 8 bits
- *
- * @param num
- * @param buff
- * @return
- */
-int *converteBinario(int num, int *buff)
+    fclose(comp);
+ }
+
+ /**
+  * Funcao responsavel por ler os dados do arquivo comprimido,
+  * descomprimi-los e coloca-los em um arquivo temporario
+  *
+  * @param comp
+  * @param temp
+  */
+ void descomprimir(FILE *comp)
+ {
+     int cont;
+     char nomeOriginal[256], *aux, ch[2];
+
+     // Le o nome do arquivo original que foi salvo no arquivo comprimido
+     fread(nomeOriginal, 1, N, comp);
+
+     // Cria o arquivo original
+     FILE *saida = abrir(nomeOriginal, "w");
+
+     // Le o tamanho da string de binarios que foi salvo no arquivo temporario
+     fread(&cont, 1, sizeof(int), comp);
+
+     // Aloca o vetor que contera a string de binarios
+     char *vet = (char *) malloc(cont * sizeof(char));
+
+     // Aloca vetor de tuplas
+     Tupla tupla = (Tupla) malloc(sizeof(struct tupla));
+
+     //fechamento da cadeia de caracteres da janela
+     vet[0] = '\0';
+
+     //fechamento da string que contera o ultimo caracter lido do arquivo
+     ch[1] = '\0';
+
+     //loop para ler os dados do arquivo comprimido
+     while (!feof(comp))
+     {
+         //Le a tupla do arquivo
+         if (fread(tupla, 1, sizeof(struct tupla), comp))
+         {
+             //Se a tupla for lida, uma copia do vetor que contem os dados da janela
+             //e feita para o vetor auxiliar
+             aux = vet;
+
+             //O ponteiro apontara para a posicao da janela onde esta a substring
+             aux += strlen(vet) - tupla->pos;
+
+             //A janela e atualizada atraves da concatenacao do caracter copiado da substring
+             for (int i = 0; i < tupla->tam; i++)
+             {
+                 ch[0] = aux[i];
+                 strcat(vet, ch);
+             }
+
+             //O caracter de quebra e colocado na janela
+             ch[0] = (char) tupla->car;
+             strcat(vet, ch);
+         }
+     }
+
+     //Vetor que contera os bytes a serem convertidos em caracteres para a descompressao
+     char novoVet[BIT+1];
+
+     //fechamento da cadeia de caracteres do byte que sera convertido
+     novoVet[BIT] = '\0';
+
+     int i = 0; //indice para percorrer o novo vetor
+     char elem; //caracter contera os bits que formarao os bytes a serem convertidos
+
+     //loop para converter os bytes e escreve-los no arquivo
+     while((elem = vet[0]) != '\0')
+     {
+         novoVet[i] = elem; //cada bit e colocado no vetor que conterao os bytes
+         vet = vet+1; //o ponteiro do vetor com os dados da janela e colocado na proxima posicao
+         i++;
+
+         /* Quando o vetor com os bits atingir o tamanho 8, e porque
+          *  o byte esta completo e podera ser convertido
+          */
+         if (i == 8)
+         {
+             i = 0;
+             //Apos a conversao, o caracter e impresso no arquivo temporario
+             fprintf(saida, "%c", (char) converteDecimal(novoVet));
+         }
+     }
+
+     fclose(saida);
+ }
+
+int main(void)
 {
-    for (int i = 7; num != 0; num /= 2, i--)
-        buff[i] = num % 2;
-    return buff;
-}
+    char entrada[N], nomeComp[N];
 
-/**
- * Preenche todas as posicoes do buffer com 0
- *
- * @param buff
- * @return
- */
-int *limparBuffer(int *buff)
-{
-    for (int i = 0; i < 8; i++)
-        buff[i] = 0;
-    return buff;
-}
+    int opcao;
 
-/**
- * Salva o conteudo do buffer no arquivo
- *
- * @param arq
- * @param bin
- */
-void salvarArq(FILE *arq, int *bin)
-{
-    for (int i = 0; i < 8; i++)
-        fprintf(arq, "%d", bin[i]);
-}
+    //Menu de opcoes
+    printf("1 - Comprimir\n");
+    printf("2 - Descomprimir\n");
+    printf("3 - Sair\n");
+    scanf("%d", &opcao);
 
-/**
- * Le os dados do arquivo original, converte para
- * binario e salva o binario em um arquivo temporario
- *
- * @param original
- * @return
- */
-int criarArqTmp(FILE *original)
-{
-    FILE *tmp;
-    int buff[8];
-    unsigned char info;
+    FILE *temp; //ponteiro para o arquivo temporario
+    FILE *comp; //ponteiro para o arquvivo comprimido
+    FILE *arq; //ponteiro para o arquivo de entrada
 
-    if (!(tmp = fopen(".lz77.tmp", "w")))
-        return 0;
-
-    while(!feof(original))
-        if (fread(&info, 1, 1, original))
-            salvarArq(tmp, converteBinario(info, limparBuffer(buff)));
-
-    fclose(tmp);
-    return 1;
-}
-
-/**
- * Retorna um ponteiro para a ultima
- * ocorrencia de procurando em procurarei.
- *
- * Caso nenhuma ocorrencia seja encontrada, retorna NULL
- *
- * @param procurarei
- * @param procurando
- * @return
- */
-char *rstrstr(char *procurarei, char *procurando)
-{
-    char *tmp, *tmp2 = NULL;
-
-    while ((tmp = strstr(procurarei, procurando)) != NULL)
+    switch(opcao)
     {
-        tmp2 = tmp;
-        procurarei = tmp2 + strlen(procurando);
+        case 1:
+            printf("Digite o arquivo de entrada: ");
+            scanf("%s", entrada);
+
+            temp = abrir("temp.txt", "w"); //cria o arquivo temporario
+            arq = abrir(entrada, "rb"); //abre o arquivo de entrada
+
+            preencherArquivo(arq, temp); //preenhce o arquivo temporario
+
+            fclose(arq);
+            fclose(temp);
+            temp = abrir("temp.txt", "r"); //abre o arquivo temporario para leitura
+
+            printf("Digite o nome do arquivo a ser comprimido: ");
+            scanf("%s", nomeComp); //le o nome do arquivo comprimido
+
+            if (!strstr(nomeComp, ".comp"))
+                strcat(nomeComp, ".comp");
+
+            comprimir(temp, entrada, nomeComp); //chamada da funcao para comprimir o arquivo
+
+            printf("\nArquivo comprimido com sucesso!\n");
+
+            fclose(temp); //fecha o arquivo temporario
+
+            remove("temp.txt");
+            break;
+
+        case 2:
+            printf("Digite o nome do arquivo a ser descomprimido: ");
+            scanf("%s", nomeComp); //le o nome do arquivo comprimido
+
+            comp = abrir(nomeComp, "rb"); //abre o arquivo comprimido
+            descomprimir(comp); //chamada da funcao para descomprimir o arquivo
+            break;
+
+        default:
+            return EXIT_SUCCESS;
     }
 
-    return tmp2;
+    return EXIT_SUCCESS;
 }
